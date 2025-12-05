@@ -27,7 +27,8 @@ if (keystorePropertiesFile.exists()) {
 android {
     namespace = "com.rendeyllc.us_tax_calculator"
     compileSdk = flutter.compileSdkVersion
-    ndkVersion = flutter.ndkVersion
+    // CORREÇÃO 1: Definindo a versão exata do NDK que o AdMob pede
+    ndkVersion = "27.0.12077973"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_1_8
@@ -44,7 +45,8 @@ android {
 
     defaultConfig {
         applicationId = "com.rendeyllc.us_tax_calculator"
-        minSdk = flutter.minSdkVersion
+        // CORREÇÃO 2: Mudando minSdk para 23 (obrigatório para Ads novos)
+        minSdk = 23 
         targetSdk = flutter.targetSdkVersion
         versionCode = flutterVersionCode.toIntOrNull() ?: 1
         versionName = flutterVersionName ?: "1.0"
@@ -52,7 +54,6 @@ android {
 
     signingConfigs {
         create("release") {
-            // Lógica simplificada para evitar erros de compilação
             val pStoreFile = keystoreProperties.getProperty("storeFile")
             if (pStoreFile != null) {
                 storeFile = file(pStoreFile)
