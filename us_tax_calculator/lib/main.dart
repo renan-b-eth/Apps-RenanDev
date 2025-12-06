@@ -7,8 +7,9 @@ import 'package:flutter/services.dart';
 import 'package:google_mobile_ads/google_mobile_ads.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:percent_indicator/percent_indicator.dart';
 
-// --- DADOS: TAXAS MÉDIAS POR ESTADO (ESTIMATIVA 2025) ---
+// --- DADOS: TAXAS MÉDIAS POR ESTADO (2025) ---
 const Map<String, double> usStatesTaxRates = {
   'Alabama': 9.22, 'Alaska': 1.76, 'Arizona': 8.40, 'Arkansas': 9.51,
   'California': 8.82, 'Colorado': 7.77, 'Connecticut': 6.35, 'Delaware': 0.0,
@@ -23,16 +24,18 @@ const Map<String, double> usStatesTaxRates = {
   'South Dakota': 6.40, 'Tennessee': 9.55, 'Texas': 8.19, 'Utah': 7.19,
   'Vermont': 6.24, 'Virginia': 5.75, 'Washington': 9.29, 'West Virginia': 6.50,
   'Wisconsin': 5.43, 'Wyoming': 5.33, 'Washington D.C.': 6.00,
-  'Custom Rate': 0.0,
 };
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  MobileAds.instance.initialize();
   
-  // Forçar modo retrato (App utilitário fica melhor em pé)
-  SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp])
-      .then((_) {
+  // Inicializa Ads apenas se for Android ou iOS (Evita erro no Linux)
+  if (Platform.isAndroid || Platform.isIOS) {
+    MobileAds.instance.initialize();
+  }
+  
+  // Orientação Retrato
+  SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]).then((_) {
     runApp(const TaxApp());
   });
 }
@@ -43,64 +46,65 @@ class TaxApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'US Tax Butler',
+      title: 'US Tax Shopper',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         useMaterial3: true,
-        // Verde Dólar para criar identidade visual
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF006400)),
-        scaffoldBackgroundColor: const Color(0xFFF5F5F5),
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF006400), // Verde Dólar
+          brightness: Brightness.light,
+        ),
+        scaffoldBackgroundColor: const Color(0xFFF5F7FA),
+        appBarTheme: const AppBarTheme(
+          backgroundColor: Color(0xFF006400),
+          foregroundColor: Colors.white,
+          centerTitle: true,
+          elevation: 0,
+        ),
       ),
-      home: const CalculatorScreen(),
+      home: const MainScreen(),
     );
   }
 }
 
-class CalculatorScreen extends StatefulWidget {
-  const CalculatorScreen({super.key});
+class MainScreen extends StatefulWidget {
+  const MainScreen({super.key});
 
   @override
-  State<CalculatorScreen> createState() => _CalculatorScreenState();
+  State<MainScreen> createState() => _MainScreenState();
 }
 
-class _CalculatorScreenState extends State<CalculatorScreen> {
-  // --- CONTROLLADORES ---
-  final TextEditingController _priceController = TextEditingController();
-  final TextEditingController _taxRateController = TextEditingController();
+class _MainScreenState extends State<MainScreen> {
+  int _currentIndex = 0;
   
-  String _selectedState = 'New York'; // Padrão popular
-  double _resultTotal = 0.0;
-  double _resultTaxAmount = 0.0;
-  bool _isReverseCalculation = false; // "Tenho $X, qual o preço da etiqueta?"
-  
-  // Lista de Compras (Retenção: Usuário usa enquanto faz compras)
+  // --- ESTADO GLOBAL ---
   List<Map<String, dynamic>> _history = [];
-
+  double _budgetLimit = 0.0;
+  String _selectedState = 'New York';
+  
   // --- ADMOB ---
   BannerAd? _bannerAd;
   bool _isBannerAdReady = false;
   InterstitialAd? _interstitialAd;
-  int _actionCounter = 0; // Contar ações para exibir anúncio
 
-  // IDs DE TESTE DO GOOGLE (Troque pelos seus reais na publicação)
+  // IDs DE TESTE (Troque pelos seus reais na loja)
   final String _bannerUnitId = Platform.isAndroid 
-      ? 'ca-app-pub-3940256099942544/6300978111' 
-      : 'ca-app-pub-3940256099942544/2934735716';
-      
+      ? 'ca-app-pub-3940256099942544/6300978111' : 'ca-app-pub-3940256099942544/2934735716';
   final String _interstitialUnitId = Platform.isAndroid
-      ? 'ca-app-pub-3940256099942544/1033173712'
-      : 'ca-app-pub-3940256099942544/4411468910';
+      ? 'ca-app-pub-3940256099942544/1033173712' : 'ca-app-pub-3940256099942544/4411468910';
 
   @override
   void initState() {
     super.initState();
-    _loadHistory();
-    _setTaxRateForState(_selectedState);
-    _loadBannerAd();
-    _createInterstitialAd();
+    _loadData();
+    // Só carrega anúncios se for Android/iOS
+    if (Platform.isAndroid || Platform.isIOS) {
+      _loadBannerAd();
+      _createInterstitialAd();
+    }
   }
 
-  // --- LÓGICA DE ANÚNCIOS ---
+  // --- AD LOGIC ---
   void _loadBannerAd() {
     _bannerAd = BannerAd(
       adUnitId: _bannerUnitId,
@@ -108,10 +112,7 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
       size: AdSize.banner,
       listener: BannerAdListener(
         onAdLoaded: (_) => setState(() => _isBannerAdReady = true),
-        onAdFailedToLoad: (ad, err) {
-          ad.dispose();
-          _isBannerAdReady = false;
-        },
+        onAdFailedToLoad: (ad, err) { ad.dispose(); _isBannerAdReady = false; },
       ),
     )..load();
   }
@@ -126,14 +127,14 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
         ));
   }
 
-  void _showInterstitialAd() {
+  void _showInterstitial() {
     if (_interstitialAd != null) {
       _interstitialAd!.fullScreenContentCallback = FullScreenContentCallback(
-        onAdDismissedFullScreenContent: (Ad ad) {
+        onAdDismissedFullScreenContent: (ad) {
           ad.dispose();
-          _createInterstitialAd(); // Carrega o próximo
+          _createInterstitialAd();
         },
-        onAdFailedToShowFullScreenContent: (Ad ad, AdError error) {
+        onAdFailedToShowFullScreenContent: (ad, err) {
           ad.dispose();
           _createInterstitialAd();
         },
@@ -143,252 +144,582 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
     }
   }
 
-  void _checkAdTrigger() {
-    _actionCounter++;
-    // Exibe anúncio tela cheia a cada 4 itens salvos (não irrita, mas monetiza)
-    if (_actionCounter >= 4) {
-      _showInterstitialAd();
-      _actionCounter = 0;
-    }
-  }
-
-  // --- CÁLCULOS ---
-  void _setTaxRateForState(String state) {
-    setState(() {
-      _selectedState = state;
-      if (state != 'Custom Rate') {
-        _taxRateController.text = usStatesTaxRates[state]!.toStringAsFixed(2);
-      }
-      _calculate();
-    });
-  }
-
-  void _calculate() {
-    double price = double.tryParse(_priceController.text.replaceAll(',', '.')) ?? 0.0;
-    double rate = double.tryParse(_taxRateController.text.replaceAll(',', '.')) ?? 0.0;
-
-    if (_isReverseCalculation) {
-      // Reverso: Total / (1 + taxa) = Preço Original
-      double originalPrice = price / (1 + (rate / 100));
-      setState(() {
-        _resultTotal = price;
-        _resultTaxAmount = price - originalPrice;
-      });
-    } else {
-      // Normal: Preço * (1 + taxa) = Total
-      double tax = price * (rate / 100);
-      setState(() {
-        _resultTaxAmount = tax;
-        _resultTotal = price + tax;
-      });
-    }
-  }
-
-  // --- SALVAR DADOS (Retenção) ---
-  Future<void> _loadHistory() async {
+  // --- DATA LOGIC ---
+  Future<void> _loadData() async {
     final prefs = await SharedPreferences.getInstance();
-    final String? historyString = prefs.getString('history');
-    if (historyString != null) {
-      setState(() {
+    setState(() {
+      _selectedState = prefs.getString('state') ?? 'New York';
+      _budgetLimit = prefs.getDouble('budget') ?? 0.0;
+      final historyString = prefs.getString('history');
+      if (historyString != null) {
         _history = List<Map<String, dynamic>>.from(json.decode(historyString));
-      });
+      }
+    });
+  }
+
+  Future<void> _saveData() async {
+    final prefs = await SharedPreferences.getInstance();
+    prefs.setString('state', _selectedState);
+    prefs.setDouble('budget', _budgetLimit);
+    prefs.setString('history', json.encode(_history));
+  }
+
+  void _addItem(Map<String, dynamic> item) {
+    setState(() {
+      _history.insert(0, item);
+      _saveData();
+    });
+    // Se a lista ficar grande, mostra anúncio (apenas mobile)
+    if (_history.length % 5 == 0 && (Platform.isAndroid || Platform.isIOS)) {
+      _showInterstitial();
     }
   }
 
-  Future<void> _addToHistory() async {
-    if (_priceController.text.isEmpty) return;
-    FocusScope.of(context).unfocus(); // Esconder teclado
-
-    final newItem = {
-      'price': _priceController.text, // Valor digitado
-      'state': _selectedState,
-      'taxVal': _resultTaxAmount,
-      'total': _resultTotal,
-      'isReverse': _isReverseCalculation,
-    };
-
+  void _removeItem(int index) {
     setState(() {
-      _history.insert(0, newItem); // Adiciona no topo
+      _history.removeAt(index);
+      _saveData();
     });
-    
-    final prefs = await SharedPreferences.getInstance();
-    prefs.setString('history', json.encode(_history));
-    
-    _priceController.clear();
-    _calculate(); // Reseta display
-    _checkAdTrigger(); // Checa se mostra anúncio
-    
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Saved to list!'), duration: Duration(milliseconds: 700)),
-    );
   }
 
-  Future<void> _clearHistory() async {
-    setState(() => _history.clear());
-    final prefs = await SharedPreferences.getInstance();
-    prefs.remove('history');
+  void _clearHistory() {
+    if (Platform.isAndroid || Platform.isIOS) _showInterstitial();
+    setState(() {
+      _history.clear();
+      _saveData();
+    });
+  }
+
+  void _updateBudget(double newBudget) {
+    setState(() {
+      _budgetLimit = newBudget;
+      _saveData();
+    });
+  }
+
+  void _updateState(String newState) {
+    setState(() {
+      _selectedState = newState;
+      _saveData();
+    });
   }
 
   @override
   Widget build(BuildContext context) {
-    final currencyFormat = NumberFormat.simpleCurrency(locale: 'en_US');
+    final screens = [
+      CalculatorTab(
+        selectedState: _selectedState,
+        budgetLimit: _budgetLimit,
+        currentHistory: _history,
+        onAddItem: _addItem,
+        onStateChanged: _updateState,
+      ),
+      HistoryTab(
+        history: _history,
+        budgetLimit: _budgetLimit,
+        onRemove: _removeItem,
+        onClear: _clearHistory,
+      ),
+      SettingsTab(
+        currentBudget: _budgetLimit,
+        onUpdateBudget: _updateBudget,
+      ),
+    ];
+
+    return Scaffold(
+      body: SafeArea(child: screens[_currentIndex]),
+      bottomNavigationBar: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Banner Fixo (Só mostra se carregou)
+          if (_isBannerAdReady)
+            Container(
+              alignment: Alignment.center,
+              width: _bannerAd!.size.width.toDouble(),
+              height: _bannerAd!.size.height.toDouble(),
+              child: AdWidget(ad: _bannerAd!),
+            ),
+          NavigationBar(
+            selectedIndex: _currentIndex,
+            onDestinationSelected: (idx) => setState(() => _currentIndex = idx),
+            indicatorColor: Colors.green.shade100,
+            destinations: const [
+              NavigationDestination(
+                icon: Icon(Icons.calculate_outlined),
+                selectedIcon: Icon(Icons.calculate),
+                label: 'Calc',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.receipt_long_outlined),
+                selectedIcon: Icon(Icons.receipt_long),
+                label: 'My List',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.account_balance_wallet_outlined),
+                selectedIcon: Icon(Icons.account_balance_wallet),
+                label: 'Budget',
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ==========================================
+// TELA 1: CALCULADORA (A Principal)
+// ==========================================
+class CalculatorTab extends StatefulWidget {
+  final String selectedState;
+  final double budgetLimit;
+  final List<Map<String, dynamic>> currentHistory;
+  final Function(Map<String, dynamic>) onAddItem;
+  final Function(String) onStateChanged;
+
+  const CalculatorTab({
+    super.key,
+    required this.selectedState,
+    required this.budgetLimit,
+    required this.currentHistory,
+    required this.onAddItem,
+    required this.onStateChanged,
+  });
+
+  @override
+  State<CalculatorTab> createState() => _CalculatorTabState();
+}
+
+class _CalculatorTabState extends State<CalculatorTab> {
+  final _priceCtrl = TextEditingController();
+  final _taxCtrl = TextEditingController();
+  double _displayTotal = 0.0;
+  double _displayTax = 0.0;
+  bool _isReverse = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _updateTaxRate();
+  }
+
+  @override
+  void didUpdateWidget(CalculatorTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.selectedState != widget.selectedState) {
+      _updateTaxRate();
+    }
+  }
+
+  void _updateTaxRate() {
+    if (widget.selectedState != 'Custom Rate') {
+      _taxCtrl.text = usStatesTaxRates[widget.selectedState]!.toStringAsFixed(2);
+    }
+    _calculate();
+  }
+
+  void _calculate() {
+    double price = double.tryParse(_priceCtrl.text.replaceAll(',', '.')) ?? 0.0;
+    double rate = double.tryParse(_taxCtrl.text.replaceAll(',', '.')) ?? 0.0;
+
+    if (_isReverse) {
+      double original = price / (1 + (rate / 100));
+      setState(() {
+        _displayTotal = price;
+        _displayTax = price - original;
+      });
+    } else {
+      double tax = price * (rate / 100);
+      setState(() {
+        _displayTax = tax;
+        _displayTotal = price + tax;
+      });
+    }
+  }
+
+  void _saveItem() {
+    if (_priceCtrl.text.isEmpty) return;
+    HapticFeedback.mediumImpact();
+    widget.onAddItem({
+      'price': double.tryParse(_priceCtrl.text) ?? 0.0,
+      'tax': _displayTax,
+      'total': _displayTotal,
+      'state': widget.selectedState,
+      'isReverse': _isReverse,
+      'date': DateTime.now().toIso8601String(),
+    });
+    _priceCtrl.clear();
+    _calculate();
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Added to your list!'), duration: Duration(milliseconds: 600)),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final currency = NumberFormat.simpleCurrency(locale: 'en_US');
+    
+    // Budget
+    double currentSpent = widget.currentHistory.fold(0.0, (sum, item) => sum + (item['total'] as double));
+    double percent = widget.budgetLimit > 0 ? (currentSpent / widget.budgetLimit) : 0.0;
+    if (percent > 1.0) percent = 1.0;
+    Color statusColor = percent < 0.7 ? Colors.green : (percent < 0.95 ? Colors.orange : Colors.red);
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('🇺🇸 Tax Calculator', style: TextStyle(fontWeight: FontWeight.bold))),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          children: [
+            // --- BUDGET BAR ---
+            if (widget.budgetLimit > 0)
+              Container(
+                padding: const EdgeInsets.all(15),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(15),
+                  boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 5, offset: const Offset(0, 2))],
+                ),
+                child: Column(
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text("Monthly Budget", style: TextStyle(color: Colors.grey[600], fontWeight: FontWeight.bold)),
+                        Text("${currency.format(currentSpent)} / ${currency.format(widget.budgetLimit)}", 
+                          style: TextStyle(color: statusColor, fontWeight: FontWeight.bold)),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    LinearPercentIndicator(
+                      lineHeight: 14.0,
+                      percent: percent,
+                      barRadius: const Radius.circular(10),
+                      backgroundColor: Colors.grey[200],
+                      progressColor: statusColor,
+                      animation: true,
+                    ),
+                  ],
+                ),
+              ),
+            const SizedBox(height: 15),
+
+            // --- DISPLAY GRANDE ---
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(20),
+                boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 10, offset: const Offset(0, 5))],
+              ),
+              child: Column(
+                children: [
+                  // AQUI ESTAVA O ERRO (uppercase: true). JÁ CORRIGIDO ABAIXO:
+                  Text(
+                    (_isReverse ? 'Sticker Price (Pre-Tax)' : 'You Pay (Post-Tax)').toUpperCase(), 
+                    style: TextStyle(color: Colors.grey[600], fontSize: 12, letterSpacing: 1.2)
+                  ),
+                  const SizedBox(height: 5),
+                  FittedBox(
+                    child: Text(
+                      currency.format(_isReverse ? (_displayTotal - _displayTax) : _displayTotal),
+                      style: const TextStyle(fontSize: 52, fontWeight: FontWeight.w900, color: Color(0xFF006400)),
+                    ),
+                  ),
+                  const Divider(height: 30),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        const Text('TAX ADDED', style: TextStyle(fontSize: 10, color: Colors.grey)),
+                        Text(currency.format(_displayTax), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Colors.redAccent)),
+                      ]),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        decoration: BoxDecoration(color: Colors.green[50], borderRadius: BorderRadius.circular(20)),
+                        child: Text(widget.selectedState, style: const TextStyle(color: Colors.green, fontWeight: FontWeight.bold)),
+                      )
+                    ],
+                  )
+                ],
+              ),
+            ),
+            const SizedBox(height: 20),
+
+            // --- INPUTS ---
+            Row(
+              children: [
+                Expanded(
+                  flex: 2,
+                  child: DropdownButtonFormField<String>(
+                    value: usStatesTaxRates.containsKey(widget.selectedState) ? widget.selectedState : 'New York',
+                    decoration: InputDecoration(
+                      labelText: 'State',
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 15, vertical: 15),
+                      filled: true,
+                      fillColor: Colors.white,
+                    ),
+                    items: usStatesTaxRates.keys.map((String state) {
+                      return DropdownMenuItem<String>(
+                        value: state,
+                        child: Text(state, overflow: TextOverflow.ellipsis),
+                      );
+                    }).toList(),
+                    onChanged: (val) => widget.onStateChanged(val!),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  flex: 1,
+                  child: TextField(
+                    controller: _taxCtrl,
+                    keyboardType: TextInputType.number,
+                    textAlign: TextAlign.center,
+                    decoration: InputDecoration(
+                      labelText: 'Tax %',
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                      filled: true,
+                      fillColor: Colors.white,
+                    ),
+                    onChanged: (_) => _calculate(),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 15),
+            
+            TextField(
+              controller: _priceCtrl,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+              decoration: InputDecoration(
+                prefixText: '\$ ',
+                labelText: _isReverse ? 'Budget in hand' : 'Price tag',
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                filled: true,
+                fillColor: Colors.white,
+                suffixIcon: IconButton(
+                  icon: Icon(_isReverse ? Icons.undo : Icons.swap_vert_circle, color: Colors.green),
+                  tooltip: "Switch to Reverse Mode",
+                  onPressed: () {
+                    setState(() {
+                      _isReverse = !_isReverse;
+                      _calculate();
+                    });
+                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                      content: Text(_isReverse ? "Reverse Mode: Calculate price FROM total" : "Normal Mode: Calculate total FROM price"),
+                      duration: const Duration(seconds: 1),
+                    ));
+                  },
+                ),
+              ),
+              onChanged: (_) => _calculate(),
+            ),
+            const SizedBox(height: 20),
+            
+            SizedBox(
+              width: double.infinity,
+              height: 55,
+              child: ElevatedButton.icon(
+                onPressed: _saveItem,
+                icon: const Icon(Icons.add_shopping_cart),
+                label: const Text("ADD TO LIST", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF006400),
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  elevation: 5,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ==========================================
+// TELA 2: HISTÓRICO (Lista de Compras)
+// ==========================================
+class HistoryTab extends StatelessWidget {
+  final List<Map<String, dynamic>> history;
+  final double budgetLimit;
+  final Function(int) onRemove;
+  final VoidCallback onClear;
+
+  const HistoryTab({
+    super.key,
+    required this.history,
+    required this.budgetLimit,
+    required this.onRemove,
+    required this.onClear,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final currency = NumberFormat.simpleCurrency(locale: 'en_US');
+    double grandTotal = history.fold(0.0, (sum, item) => sum + (item['total'] as double));
+    double totalTax = history.fold(0.0, (sum, item) => sum + (item['tax'] as double));
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('🇺🇸 US Tax Butler', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
-        backgroundColor: const Color(0xFF006400),
-        centerTitle: true,
+        title: const Text('My Shopping List'),
         actions: [
           IconButton(
-            icon: const Icon(Icons.delete_outline, color: Colors.white),
-            onPressed: _clearHistory,
+            icon: const Icon(Icons.delete_sweep),
+            onPressed: () {
+              showDialog(context: context, builder: (ctx) => AlertDialog(
+                title: const Text("Clear List?"),
+                content: const Text("This will remove all items."),
+                actions: [
+                  TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Cancel")),
+                  TextButton(onPressed: () {
+                    Navigator.pop(ctx);
+                    onClear();
+                  }, child: const Text("Clear All", style: TextStyle(color: Colors.red))),
+                ],
+              ));
+            },
           )
         ],
       ),
       body: Column(
         children: [
-          Expanded(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(16.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  // --- CARD DE RESULTADO ---
-                  Card(
-                    elevation: 4,
-                    color: Colors.white,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-                    child: Padding(
-                      padding: const EdgeInsets.all(20.0),
-                      child: Column(
-                        children: [
-                          Text(
-                            _isReverseCalculation ? 'Original Price (Before Tax)' : 'Final Price (With Tax)',
-                            style: TextStyle(color: Colors.grey[600], fontSize: 14),
-                          ),
-                          const SizedBox(height: 5),
-                          Text(
-                            currencyFormat.format(_isReverseCalculation ? (_resultTotal - _resultTaxAmount) : _resultTotal),
-                            style: const TextStyle(fontSize: 40, fontWeight: FontWeight.bold, color: Color(0xFF006400)),
-                          ),
-                          const Divider(),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Text('Tax Amount:', style: TextStyle(color: Colors.grey[600])),
-                              Text(currencyFormat.format(_resultTaxAmount), style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.redAccent)),
-                            ],
-                          )
-                        ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-
-                  // --- CONTROLES ---
-                  Row(
-                    children: [
-                      Expanded(
-                        child: DropdownButtonFormField<String>(
-                          value: _selectedState,
-                          decoration: const InputDecoration(
-                            labelText: 'State',
-                            border: OutlineInputBorder(),
-                            contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 15),
-                          ),
-                          items: usStatesTaxRates.keys.map((String state) {
-                            return DropdownMenuItem<String>(
-                              value: state,
-                              child: Text(state, overflow: TextOverflow.ellipsis),
-                            );
-                          }).toList(),
-                          onChanged: (val) => _setTaxRateForState(val!),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      SizedBox(
-                        width: 100,
-                        child: TextField(
-                          controller: _taxRateController,
-                          keyboardType: TextInputType.number,
-                          decoration: const InputDecoration(
-                            labelText: 'Tax %',
-                            border: OutlineInputBorder(),
-                            suffixText: '%',
-                          ),
-                          onChanged: (_) => _calculate(),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 15),
-                  
-                  TextField(
-                    controller: _priceController,
-                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                    style: const TextStyle(fontSize: 22),
-                    decoration: InputDecoration(
-                      labelText: _isReverseCalculation ? 'I have this total amount:' : 'Price on sticker:',
-                      prefixText: '\$ ',
-                      border: const OutlineInputBorder(),
-                      suffixIcon: IconButton(
-                        icon: Icon(_isReverseCalculation ? Icons.undo : Icons.autorenew),
-                        onPressed: () {
-                          setState(() {
-                            _isReverseCalculation = !_isReverseCalculation;
-                            _calculate();
-                          });
-                        },
-                      ),
-                    ),
-                    onChanged: (_) => _calculate(),
-                  ),
-                  const SizedBox(height: 15),
-
-                  ElevatedButton.icon(
-                    onPressed: _addToHistory,
-                    icon: const Icon(Icons.add_shopping_cart),
-                    label: const Text('ADD TO LIST', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF006400),
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 15),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                    ),
-                  ),
-
-                  const SizedBox(height: 25),
-                  const Text("Shopping History", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 10),
-
-                  // --- LISTA DE HISTÓRICO ---
-                  ListView.builder(
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    itemCount: _history.length,
-                    itemBuilder: (context, index) {
-                      final item = _history[index];
-                      return ListTile(
-                        leading: const Icon(Icons.receipt_long, color: Colors.grey),
-                        title: Text(currencyFormat.format(item['total'])),
-                        subtitle: Text("${item['state']} Tax: ${currencyFormat.format(item['taxVal'])}"),
-                        trailing: Text(item['isReverse'] ? 'Reverse' : 'Regular', style: const TextStyle(fontSize: 12, color: Colors.grey)),
-                      );
-                    },
-                  ),
-                ],
-              ),
+          Container(
+            padding: const EdgeInsets.all(20),
+            color: Colors.white,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const Text("TOTAL TAX", style: TextStyle(fontSize: 12, color: Colors.grey)),
+                  Text(currency.format(totalTax), style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.red)),
+                ]),
+                Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                  const Text("GRAND TOTAL", style: TextStyle(fontSize: 12, color: Colors.grey)),
+                  Text(currency.format(grandTotal), style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w900, color: Colors.black)),
+                ]),
+              ],
             ),
           ),
-          
-          // --- BANNER AD NO RODAPÉ ---
-          if (_isBannerAdReady)
-            SizedBox(
-              width: _bannerAd!.size.width.toDouble(),
-              height: _bannerAd!.size.height.toDouble(),
-              child: AdWidget(ad: _bannerAd!),
-            ),
+          const Divider(height: 1),
+          Expanded(
+            child: history.isEmpty 
+              ? Center(child: Text("Your cart is empty", style: TextStyle(color: Colors.grey[400], fontSize: 18)))
+              : ListView.builder(
+                  itemCount: history.length,
+                  itemBuilder: (ctx, i) {
+                    final item = history[i];
+                    return Dismissible(
+                      key: Key(item['date'].toString()),
+                      direction: DismissDirection.endToStart,
+                      background: Container(
+                        alignment: Alignment.centerRight,
+                        padding: const EdgeInsets.only(right: 20),
+                        color: Colors.red,
+                        child: const Icon(Icons.delete, color: Colors.white),
+                      ),
+                      onDismissed: (dir) => onRemove(i),
+                      child: ListTile(
+                        leading: CircleAvatar(
+                          backgroundColor: Colors.green[50],
+                          child: const Icon(Icons.shopping_bag, color: Colors.green),
+                        ),
+                        title: Text(currency.format(item['total']), style: const TextStyle(fontWeight: FontWeight.bold)),
+                        subtitle: Text("Price: ${currency.format(item['price'])} + Tax: ${currency.format(item['tax'])}"),
+                        trailing: Text(item['state'], style: const TextStyle(color: Colors.grey, fontSize: 12)),
+                      ),
+                    );
+                  },
+                ),
+          ),
         ],
+      ),
+    );
+  }
+}
+
+// ==========================================
+// TELA 3: AJUSTES & BUDGET
+// ==========================================
+class SettingsTab extends StatefulWidget {
+  final double currentBudget;
+  final Function(double) onUpdateBudget;
+
+  const SettingsTab({super.key, required this.currentBudget, required this.onUpdateBudget});
+
+  @override
+  State<SettingsTab> createState() => _SettingsTabState();
+}
+
+class _SettingsTabState extends State<SettingsTab> {
+  final _budgetCtrl = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.currentBudget > 0) {
+      _budgetCtrl.text = widget.currentBudget.toStringAsFixed(2);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Budget & Settings')),
+      body: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text("Set Monthly Budget", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 5),
+            const Text("Track your spending. The bar will turn red if you exceed this limit.", style: TextStyle(color: Colors.grey)),
+            const SizedBox(height: 15),
+            TextField(
+              controller: _budgetCtrl,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(
+                prefixText: "\$ ",
+                border: OutlineInputBorder(),
+                labelText: "Limit Amount (Ex: 500)",
+                helperText: "Set to 0 to disable",
+              ),
+            ),
+            const SizedBox(height: 15),
+            SizedBox(
+              width: double.infinity,
+              height: 50,
+              child: ElevatedButton(
+                onPressed: () {
+                  FocusScope.of(context).unfocus();
+                  double val = double.tryParse(_budgetCtrl.text) ?? 0.0;
+                  widget.onUpdateBudget(val);
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Budget Saved!")));
+                },
+                style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF006400), foregroundColor: Colors.white),
+                child: const Text("SAVE BUDGET"),
+              ),
+            ),
+            const SizedBox(height: 40),
+            
+            const Text("About", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const Divider(),
+            const ListTile(
+              leading: Icon(Icons.info_outline),
+              title: Text("Version 1.0.0"),
+              subtitle: Text("US Sales Tax Calculator"),
+            ),
+            const ListTile(
+              leading: Icon(Icons.shield_outlined),
+              title: Text("Privacy Policy"),
+              trailing: Icon(Icons.chevron_right),
+            ),
+          ],
+        ),
       ),
     );
   }
