@@ -46,7 +46,7 @@ android {
     defaultConfig {
         applicationId = "com.rendeyllc.us_tax_calculator"
         // CORREÇÃO 2: Mudando minSdk para 23 (obrigatório para Ads novos)
-        minSdk = 23 
+        minSdk = flutter.minSdkVersion 
         targetSdk = flutter.targetSdkVersion
         versionCode = flutterVersionCode.toIntOrNull() ?: 1
         versionName = flutterVersionName ?: "1.0"
