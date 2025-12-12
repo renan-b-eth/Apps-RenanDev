@@ -87,12 +87,15 @@ class _MainScreenState extends State<MainScreen> {
   bool _isBannerAdReady = false;
   InterstitialAd? _interstitialAd;
 
-  // IDs DE TESTE (Troque pelos seus reais na loja)
+ // --- CONFIGURAÇÃO DE ANÚNCIOS (RENDEY LLC) ---
   final String _bannerUnitId = Platform.isAndroid 
-      ? 'ca-app-pub-3940256099942544/6300978111' : 'ca-app-pub-3940256099942544/2934735716';
+      ? 'ca-app-pub-3139983145335923/1560558248' // Seu ID Real de Banner
+      : 'ca-app-pub-3139983145335923/1560558248';
+      
   final String _interstitialUnitId = Platform.isAndroid
-      ? 'ca-app-pub-3940256099942544/1033173712' : 'ca-app-pub-3940256099942544/4411468910';
-
+      ? 'ca-app-pub-3139983145335923/7934394903' // Seu ID Real de Intersticial
+      : 'ca-app-pub-3139983145335923/7934394903';
+      
   @override
   void initState() {
     super.initState();
